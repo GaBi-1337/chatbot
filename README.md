@@ -1,4 +1,4 @@
-# GPT OSS 20B Chat Bot (Initial Commit)
+# GPT OSS 20B Chat Bot
 
 A terminal-based chatbot implementation for the **GPT OSS 20B** model. This is an initial release focused on core inference and specialized visualization of the model's reasoning process.
 
