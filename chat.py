@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, TextStreamer
 from huggingface_hub import login, snapshot_download
 from dotenv import load_dotenv
@@ -66,7 +67,8 @@ class ColoredStreamer(TextStreamer):
         self.on_finalized_text(printable_text)
 
 def main():
-    model_path = os.path.join('Models', 'GPT')
+    prompts_root = Path('prompts')
+    model_path = Path('Models', 'GPT')
 
     tokenizer, model = load_model(model_path)
     pipe = pipeline(
@@ -87,7 +89,7 @@ def main():
 
     os.system('cls')
     messages = []
-    with open(os.path.join('prompts', 'system_prompt.txt'), 'r') as f: messages.append({'role': 'system', 'content': f.read()})
+    with open(prompts_root / 'system_prompt.txt', 'r') as f: messages.append({'role': 'system', 'content': f.read()})
     
     print(f"{Fore.MAGENTA}Assistant:\n{Fore.GREEN}Hello, how can I help you today?\n")
     
