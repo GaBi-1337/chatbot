@@ -75,19 +75,15 @@ def main():
         task='text-generation',
         model=model,
         tokenizer=tokenizer,
-        framework='pt',
         return_full_text=False,
-        max_new_tokens=8_192,
-        top_k=None,
         streamer=ColoredStreamer(
             tokenizer,
             skip_prompt=True,
             skip_special_tokens=True,
-        ),
-        temperature=0.6
+        )
     )
 
-    os.system('cls')
+    os.system('clear')
     messages = []
     with open(prompts_root / 'system_prompt.txt', 'r') as f: messages.append({'role': 'system', 'content': f.read()})
     
@@ -99,12 +95,17 @@ def main():
         messages.append({'role': 'user', 'content': usr_msg})
         prompt = tokenizer.apply_chat_template(
             messages,
-            reasoning_effort='meduim',
-            model_identity="You are a helpful assistant.",
             tokenize=False,
-            add_generation_prompt=True
+            add_generation_prompt=True,
+            reasoning_effort='meduim',
+            model_identity="You are a helpful assistant."
         )
         print(f"{Fore.MAGENTA}Assistant:{Style.RESET_ALL}", end="")
-        messages.append({'role': 'assistant', 'content': pipe(prompt)[0]['generated_text'].partition('assistantfinal')[-1]})
+        messages.append({'role': 'assistant', 'content': pipe(
+            prompt,
+            temperature=0.6,
+            top_k=None,
+            max_new_tokens=8_192
+        )[0]['generated_text'].partition('assistantfinal')[-1]})
 
 if __name__ == "__main__": main()
