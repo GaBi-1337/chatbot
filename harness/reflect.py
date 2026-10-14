@@ -191,6 +191,40 @@ If nothing met the bar, say "Nothing to save." and why.
 
 
 # ---------------------------------------------------------------- run
+# ---------------------------------------------------------------- limits (pure; tested in harness/tests)
+SKILL_WRITES = ("create", "edit", "patch", "write_file")
+MEMORY_WRITES = ("add", "replace", "remove")
+
+
+def skill_call_check(args, touched, max_skills):
+    """Limit check for one skill_manage call: (error or None, skills the call writes).
+    The advertised shape is an operations array, even for one change; the legacy flat shape is one op."""
+    args = args or {}
+    ops = args.get("operations")
+    ops = [o if isinstance(o, dict) else {} for o in (ops if isinstance(ops, list) else [args])]
+    if any(o.get("action") in ("delete", "remove_file") for o in ops):
+        return ("muse reflect never deletes skills or skill files; note the overlap in your final report "
+                "instead."), set()
+    names = {str(o.get("name") or args.get("name") or "") for o in ops if o.get("action") in SKILL_WRITES}
+    new = names - set(touched)
+    if len(touched) + len(new) > max_skills:
+        return (f"muse reflect limit: {max_skills} skill(s) per run, {max(max_skills - len(touched), 0)} left "
+                f"(already changed: {', '.join(sorted(touched)) or 'none'}); this call would change "
+                f"{', '.join(sorted(new))}. Change fewer skills, or stop and write your report."), names
+    return None, names
+
+
+def memory_call_check(args, written, max_memory):
+    """Limit check for one memory call: (error or None, entries the call writes); a batch counts each entry."""
+    args = args or {}
+    ops = args.get("operations")
+    n = len(ops) if isinstance(ops, list) else 1 if args.get("action") in MEMORY_WRITES else 0
+    if n and written + n > max_memory:
+        return (f"muse reflect limit: {max_memory} memory entr(y/ies) per run, {max(max_memory - written, 0)} "
+                f"left; this call writes {n}. Write fewer, or stop and write your report."), n
+    return None, n
+
+
 def cmd_run(a):
     lim = json.loads((Path(a.dir) / "limits.json").read_text())
     import agent.oneshot_footprint as fp
@@ -219,25 +253,10 @@ def cmd_run(a):
     from tools.registry import registry
     entry = registry.get_entry("skill_manage")
     sm = entry.handler
-    writes = ("create", "edit", "patch", "write_file")
     def capped_skill_manage(args, **kw):
-        # The advertised shape is an operations array (even for one change); the legacy flat shape is one op.
-        args = args or {}
-        ops = args.get("operations")
-        if not isinstance(ops, list):
-            ops = [args]
-        ops = [o if isinstance(o, dict) else {} for o in ops]
-        if any(o.get("action") in ("delete", "remove_file") for o in ops):
-            return json.dumps({"success": False, "error": "muse reflect never deletes skills or skill files; "
-                               "note the overlap in your final report instead."})
-        names = {str(o.get("name") or args.get("name") or "") for o in ops if o.get("action") in writes}
-        new_names = names - touched
-        if len(touched) + len(new_names) > lim["max_skills"]:
-            left = lim["max_skills"] - len(touched)
-            return json.dumps({"success": False, "error": f"muse reflect limit: {lim['max_skills']} skill(s) per run, "
-                               f"{max(left, 0)} left (already changed: {', '.join(sorted(touched)) or 'none'}); "
-                               "this call would change " + ", ".join(sorted(new_names)) +
-                               ". Change fewer skills, or stop and write your report."})
+        err, names = skill_call_check(args, touched, lim["max_skills"])
+        if err:
+            return json.dumps({"success": False, "error": err})
         res = sm(args, **kw)
         if ok(res):
             touched.update(names)
@@ -247,20 +266,13 @@ def cmd_run(a):
     from agent import inline_tool_executors as ite
     mem = ite.INLINE_TOOL_EXECUTORS["memory"]
     def capped_memory(agent, args, ctx):
-        args = args or {}
-        ops = args.get("operations")
-        n = len(ops) if isinstance(ops, list) else 1 if args.get("action") in ("add", "replace", "remove") else 0
-        if n:                          # an operations batch counts each entry it writes
-            if mem_writes[0] + n > lim["max_memory"]:
-                left = max(lim["max_memory"] - mem_writes[0], 0)
-                return json.dumps({"success": False, "error": f"muse reflect limit: {lim['max_memory']} memory "
-                                   f"entr(y/ies) per run, {left} left; this call writes {n}. Write fewer, or stop "
-                                   "and write your report."})
-            res = mem(agent, args, ctx)
-            if ok(res):
-                mem_writes[0] += n
-            return res
-        return mem(agent, args, ctx)
+        err, n = memory_call_check(args, mem_writes[0], lim["max_memory"])
+        if err:
+            return json.dumps({"success": False, "error": err})
+        res = mem(agent, args, ctx)
+        if n and ok(res):
+            mem_writes[0] += n
+        return res
     ite.INLINE_TOOL_EXECUTORS["memory"] = capped_memory
 
     from hermes_cli.main import main

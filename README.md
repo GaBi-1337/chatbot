@@ -76,7 +76,7 @@ Rebuild the agent image after changing `container/` or `mcp/web/` (skills and co
 container/build.sh
 ```
 
-Run the repo checks with `scripts/check.sh`: shellcheck, the `mcp/web` tests and the eval selftest. No GPU is needed. The pre-commit hook runs them too, once it's enabled for a clone with `git config core.hooksPath .githooks`. The selftest queries live APIs, so commit with `--no-verify` when offline.
+Run the repo checks with `scripts/check.sh`: shellcheck, the `mcp/web` tests, the `harness` tests (reflect's limits, the skill router) and the eval selftest. GitHub Actions runs the same script on every push, without the selftest. No GPU is needed. The pre-commit hook runs them too, once it's enabled for a clone with `git config core.hooksPath .githooks`. The selftest queries live APIs, so commit with `--no-verify` when offline.
 
 ## How it fits together
 

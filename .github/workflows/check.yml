@@ -1,0 +1,21 @@
+# Runs scripts/check.sh (shellcheck, the mcp/web tests, the harness tests) on every push and pull request.
+# The eval selftest is skipped: it queries live APIs (GitHub's unauthenticated limit is shared by CI runners).
+name: check
+on: [push, pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install shellcheck and the test dependencies
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          python -m venv mcp/web/.venv && mcp/web/.venv/bin/pip install -q -r mcp/web/requirements-dev.txt
+          python -m pip install -q pytest PyYAML
+      - name: scripts/check.sh
+        env:
+          SKIP_SELFTEST: "1"
+        run: scripts/check.sh

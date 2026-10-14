@@ -25,6 +25,18 @@ PORT="${MUSE_PORT:-8080}"
 die() { echo "muse: $*" >&2; exit 1; }
 
 sessions() { podman ps --filter "label=muse.session=1" --format '{{.Names}}  {{.Status}}  {{index .Labels "muse.cwd"}}' 2>/dev/null || true; }
+# When the newest session in a Hermes home last used the model: tells a busy session from one left open.
+activity() {
+  [ -f "$1/state.db" ] || return 0
+  python3 -I - "$1/state.db" <<'PY' 2>/dev/null || true
+import sqlite3, sys, time
+db = sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True)
+row = db.execute("select coalesce(last_activity_at, started_at), cwd, source from sessions "
+                 "order by coalesce(last_activity_at, started_at) desc limit 1").fetchone()
+if row:
+    print(f"  last model activity: {(time.time() - row[0]) / 60:.0f} min ago ({row[1] or row[2] + ' run'})")
+PY
+}
 # Sessions and evals that share this Hermes home or this model port (unlabelled ones: state/hermes and 8080).
 sharing() {
   local me h p rest; me="$(readlink -f "$STATE")"
@@ -71,7 +83,7 @@ Refuses while a muse session or eval runs. Report: state/hermes/reflect/<time>/r
   --stage          don't apply: stage every write for approval (/skills pending, /memory pending in a session)
   --since T        last (default) | 3d | 12h | 2w | 2026-10-01 | all
   --list           only show which sessions would be reviewed (no model call)
-  --max-sessions   newest N sessions in the window (12)    --max-turns   agent turns (40)
+  --max-sessions   oldest N sessions in the window (12)    --max-turns   agent turns (40)
   --max-skills     distinct skills created or changed (3)  --budget      wall-clock seconds (1800)
   --max-memory     memory writes (5)                       --reasoning   low|medium|high|xhigh (config: high)
 Skill deletes are refused; memory replace/remove are staged. Each skill write is in Hermes's ledger:
@@ -162,7 +174,12 @@ case "${1:-}" in
     exec "$SERVE" stop ;;
   status)
     rc=0; "$SERVE" status || rc=$?
-    s="$(sessions)"; if [ -n "$s" ]; then echo "sessions:"; echo "$s" | sed 's/^/  /'; else echo "sessions: none"; fi
+    s="$(sessions)"
+    if [ -n "$s" ]; then
+      echo "sessions:"; echo "$s" | sed 's/^/  /'
+      podman ps --filter "label=muse.session=1" --format '{{index .Labels "muse.home"}}' 2>/dev/null | sort -u |
+        while read -r h; do activity "${h:-$REPO/state/hermes}"; done
+    else echo "sessions: none"; fi
     podman image exists "$IMAGE" 2>/dev/null && echo "image: $IMAGE" || echo "image: $IMAGE missing (run container/build.sh)"
     exit "$rc" ;;
   -h|--help|help)

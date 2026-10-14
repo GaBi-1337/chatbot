@@ -3,8 +3,10 @@ Models/
 run/
 evals/results/
 .claude/boards/
+.claude/settings.local.json
 __pycache__/
 *.pyc
 .venv/
 state/
 tools/llama.cpp/
+tools/hermes-src/
