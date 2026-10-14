@@ -1,0 +1,160 @@
+# Hermes Agent home template for muse (seeded into state/hermes on first launch, and fresh per eval run).
+# Hermes v0.21.7. Keys checked against hermes_cli/config_defaults.py of that tag.
+
+model:
+  provider: muse                          # named custom provider below
+  default: muse-glimmer-30B
+  context_length: 131072
+  supports_vision: true                   # Muse sees images; serve.sh loads the vision projector by default
+
+providers:
+  muse:
+    base_url: http://127.0.0.1:8080/v1    # llama-server on the host (container uses --network=host)
+    api_mode: chat_completions
+    api_key: none                         # llama-server has no key; not a credential
+    model: muse-glimmer-30B
+    extra_body:
+      parallel_tool_calls: true           # Muse/llama-server only emit parallel ATEM calls when asked
+
+agent:
+  reasoning_effort: high                  # sent as reasoning_effort; llama-server maps it to Muse's reasoning_strength
+                                          # (muse --reasoning X overrides per session)
+  environment_probe: false                # its pip check times out on a slow home mount and misreports pip as missing
+  environment_hint: >-
+    Sandbox: this session runs in a rootless Podman container. Only the current working
+    directory (mounted at the same path as on the host), the Hermes home and your own home /home/muse are
+    shared with the host; /mnt drives and the user's home are NOT available, and anything written elsewhere
+    is discarded when the session ends. Your home persists across sessions and projects: `python` and `pip`
+    are a global venv (~/venv; it is active, so `uv pip` installs there too, and it sees the image's
+    packages), and `npm install -g`, pipx or uv tools and programs in ~/.local/bin persist too. There is no root or apt: if a system package
+    is needed, tell the user so they can add it to the image. The image has gcc/g++/make, uv, ruff, sqlite3,
+    rg, fd, jq, pdftotext/pdftoppm, graphviz (dot), chromium-headless-shell, LibreOffice (soffice --headless)
+    and, fast to import, numpy,
+    pandas, matplotlib, pillow, requests, httpx, bs4, lxml, pyyaml, pypdf, pdfplumber, reportlab, openpyxl,
+    python-docx and python-pptx. Internet access works through the mcp__internet__ tools (search, fetch
+    including PDFs and JavaScript pages, screenshots).
+    There are no git or cloud credentials, so pushing is not possible. Do not try to start, stop or reach
+    the model server on 127.0.0.1:8080.
+    A GPU may be available (under WSL; check with /usr/lib/wsl/lib/nvidia-smi, or nvidia-smi elsewhere): it
+    is shared with that model server, which holds most of its memory (only a GB or two stays free), so check it before GPU work and keep jobs
+    inside the free memory (in PyTorch, torch.cuda.set_per_process_memory_fraction(free/total)). A +cpu
+    torch build won't use the GPU; plain `pip install torch` gets the CUDA 13 build, which works with
+    Python 3.14 and this driver (old indexes such as whl/cu121 have no current releases).
+    You can see images: use vision_analyze on an image file to look at it, for example a plot you just saved
+    or a mcp__internet__web_screenshot of a page or HTML file you built.
+    Skills hold tested procedures and scripts for this sandbox: before starting a task that matches one
+    (arXiv papers, web research, YouTube videos, PDF or Office files, checking visual output, testing a web
+    app), load it with skill_view; it is usually faster than working it out with general tools.
+  disabled_toolsets: [web, browser, image_gen, tts, video, video_gen, x_search,
+                      kanban, cronjob, computer_use, connections]
+
+# Explicit toolset list (instead of the hermes-cli bundle): local coding tools + MCP web below.
+toolsets: [terminal, file, code_execution, todo, memory, session_search, clarify, vision, skills, delegation, mcp-internet]
+
+# Server name must not be "web": Hermes aliases an MCP server's name to its toolset, and "web" is the
+# built-in web toolset disabled above, which then hid the MCP tools too. Tools: mcp__internet__web_search/_fetch/_screenshot.
+mcp_servers:
+  internet:
+    command: /opt/mcp-web/.venv/bin/python
+    args: [/opt/mcp-web/server.py]
+    env:
+      WEB_MCP_TIMEOUT: "20"
+      WEB_MCP_SEARCH_RETRIES: "4"
+      TMPDIR: /muse/hermes/cache/scratch   # fetched images and screenshots land here
+    tools:                                # only the real tools (no generated resource/prompt utilities)
+      include: [web_search, web_fetch, web_screenshot]
+      resources: false
+      prompts: false
+
+# Declare every enabled tool up front. tool_search would defer MCP/todo/session tools behind
+# tool_search/tool_describe/tool_call meta-tools: harder for a 30B model, and loading a tool mid-session
+# changes the tool list, which invalidates llama-server's cached prompt prefix.
+tools:
+  tool_search: {enabled: "off"}
+
+# Per-call caps sized for a 128K window (Hermes defaults: 50K chars of terminal output, 100K chars per
+# read_file call). Longer output keeps its head and tail; longer files are read in pages.
+tool_output: {max_bytes: 30000, max_lines: 2000, max_line_length: 2000}
+file_read_max_chars: 50000
+
+# Skills: Muse's own in harness/skills (mounted read-only at /muse/skills by muse and evals/run.sh), the
+# bundled ones that work in the sandbox, and any Muse writes itself (they go to this Hermes home).
+skills:
+  external_dirs: [/muse/skills]
+  # Bundled skills hidden from Muse: macOS-only, need tools or credentials it lacks, for developing Hermes
+  # itself, covered by its instructions, low value, or replaced by a muse skill (which must have another name).
+  # Kept: pdf, docx, xlsx, powerpoint, architecture-diagram, claude-design; hermes-agent can't be hidden.
+  disabled: [apple-notes, apple-reminders, findmy, imessage,
+             claude-code, codex, computer-use, opencode,
+             ascii-video, baoyu-infographic, design-md, humanizer, manim-video, p5js, popular-web-designs,
+             songwriting-and-ai-music, sdlc-review, email-inbox-triage, himalaya,
+             gif-search, songsee, youtube-content, obsidian,
+             airtable, box, document-to-action-items, google-workspace, maps, meeting-action-items, notion,
+             product-price-monitor, teams-meeting-pipeline, weekly-review-planning,
+             arxiv, competitor-news-monitor, grounded-citations, llm-wiki, xurl,
+             codebase-inspection, dogfood, github, hermes-agent-skill-authoring, inspecting-hermes-desktop-dom,
+             node-inspect-debugger, python-debugpy, requesting-code-review, simplify-code, spike,
+             systematic-debugging, test-driven-development, blocked-page-recovery]
+
+# Muse rarely loads a skill from the skills index by itself but follows a hint beside the request: this hook
+# (harness/hooks/skill_router.py, mounted at /muse/hooks) names at most two matching skills per user message.
+hooks:
+  pre_llm_call:
+    - command: /usr/local/bin/python3 -I /muse/hooks/skill_router.py
+      timeout: 10
+hooks_auto_accept: true                   # our own hook: no first-run consent prompt
+
+# Rollback snapshots (/rollback) stay off: each one rereads the whole project, which took 6-23 s per
+# edited turn for a 500-file project on a slow mount. Turn on with checkpoints: {enabled: true}.
+checkpoints: {enabled: false}
+
+# Hermes's CLI hint also explains cron-job delivery; the cronjob toolset is off, so keep only the rest.
+platform_hints:
+  cli:
+    replace: >-
+      You are in a plain terminal (CLI). Markdown does NOT render — asterisks, headers, and fences appear as
+      literal characters, so write plain text (indentation and blank lines are your only layout tools). Files:
+      there is no attachment channel — deliver a file by stating its absolute path or URL in plain text; the
+      user opens it themselves.
+
+display:
+  interface: cli
+  show_reasoning: true
+  streaming: true
+
+approvals:
+  mode: "off"                             # sandboxed in a container; equivalent to --yolo
+
+# Single llama-server slot: no background side requests (they would compete with the session for it).
+auxiliary:
+  title_generation: {enabled: false}
+  background_review: {enabled: false}
+curator: {enabled: false}
+
+# Subagents (delegate_task) take turns on the one model slot: llama-server's RAM prompt cache restores the
+# parent's context when a child returns (16K-token parent: 1.7K new tokens to process, not 16K), and the child's
+# exploration never enters the parent's context. One child at a time; a one-shot run may spawn two.
+delegation: {max_concurrent_children: 1, max_iterations: 60, oneshot_max_children: 2}
+
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+
+# After an edit in a git repo, new errors from a language server show up in the tool result. The servers
+# (pyright, typescript-language-server, bash-language-server) are in the image; manual = never npm-install
+# them into the Hermes home at run time.
+lsp: {enabled: true, install_strategy: manual}
+model_catalog: {enabled: false}           # no catalog fetches from nousresearch.com
+updates: {check: false}
+auth: {adopt_external_logins: false}
+telemetry:
+  shared_metrics: {enabled: false, send: false, offer_version: 2}   # answered "No thanks": no first-run consent prompt
+onboarding:
+  profile_build: "off"                    # no "let me build your profile" directive in the first prompt
+
+# Compact at 97% of the 131072-token window (~127K; Hermes's default floor for <512K windows is 75%).
+# The summary call is bounded (~40K tokens in, 10K out), so compaction always fits; ~3.9K tokens stay free
+# for the next reply (largest reply seen in the evals: 1.8K). A single reply longer than that near the limit
+# gets cut off at the window; lower this (e.g. 0.90) if that happens.
+compression:
+  threshold: 0.97

@@ -1,0 +1,9 @@
+Widget (A100) x3 @ $19.99 = $59.97
+Gadget (B200) x12 @ $4.35 = $52.20
+Anvil (C300) x1 @ $45.10 = $45.10
+Sprocket (D400) x7 @ $0.29 = $2.03
+Subtotal: $159.30
+Bulk discount: -$2.61
+Shipping: $1.25
+Tax (CA): $11.36
+Total: $169.30

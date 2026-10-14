@@ -1,0 +1,281 @@
+#!/usr/bin/env bash
+# muse - Hermes Agent on the local Muse Glimmer 30B, sandboxed in rootless Podman.
+#
+#   muse [--reasoning LEVEL] [hermes args...]              start the server if needed, open Hermes in $PWD
+#   muse status                                            server + running sessions
+#   muse stop                                              stop the server (frees VRAM)
+#   muse shell [cmd...]                                    bash (or cmd) in the same sandbox, without Hermes
+#   muse prompt                                            the system prompt and tools a new session here gets
+#   muse reflect [--stage] [--since T] [--list] [...]      learn skills + memory from recent sessions (muse reflect -h)
+#
+# The container sees only $PWD (same path, read-write), the Hermes home state/hermes (as /muse/hermes), the
+# persistent home state/home (as /home/muse: an active global venv, plus ~/.local/bin), harness/skills and
+# harness/hooks (read-only).
+# Existing top-level .env* files in $PWD are masked (read as empty). Network is the host's (server on 127.0.0.1:8080).
+set -euo pipefail
+
+REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+IMAGE="${MUSE_IMAGE:-localhost/muse-agent:latest}"
+SERVE="$REPO/server/serve.sh"
+TEMPLATE="$REPO/harness/hermes"
+STATE="${MUSE_STATE:-$REPO/state/hermes}"
+HOMEDIR="${MUSE_HOME_DIR:-$REPO/state/home}"
+PORT="${MUSE_PORT:-8080}"
+
+die() { echo "muse: $*" >&2; exit 1; }
+
+sessions() { podman ps --filter "label=muse.session=1" --format '{{.Names}}  {{.Status}}  {{index .Labels "muse.cwd"}}' 2>/dev/null || true; }
+# Sessions and evals that share this Hermes home or this model port (unlabelled ones: state/hermes and 8080).
+sharing() {
+  local me h p rest; me="$(readlink -f "$STATE")"
+  podman ps --filter "label=muse.session=1" \
+    --format '{{index .Labels "muse.home"}}|{{index .Labels "muse.port"}}|{{.Names}}  {{.Status}}  {{index .Labels "muse.cwd"}}' \
+    2>/dev/null | while IFS='|' read -r h p rest; do
+      [ "$(readlink -f "${h:-$REPO/state/hermes}")" = "$me" ] || [ "${p:-8080}" = "$PORT" ] && echo "$rest"
+    done
+  [ "$PORT" != 8080 ] || podman ps --filter "label=muse.eval=1" --format '{{.Names}}  {{.Status}}  (eval)' 2>/dev/null || true
+}
+
+# serve.sh start reuses its own server when the flags match and restarts it once when serve.sh's flags changed;
+# a foreign or still-loading server is waited for, never doubled
+ensure_server() {
+  if "$SERVE" status >/dev/null 2>&1; then
+    "$SERVE" start
+  else
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$PORT/health" 2>/dev/null || true)"
+    if [ "$code" = 200 ]; then
+      echo "muse: using the server already answering on 127.0.0.1:$PORT (not started by serve.sh)"
+    elif [ -n "$code" ] && [ "$code" != 000 ]; then
+      # something owns the port but is not ready (llama-server answers 503 while loading): wait, never start a second one
+      echo -n "muse: server on 127.0.0.1:$PORT is loading (HTTP $code), waiting"
+      for _ in $(seq 1 450); do
+        sleep 2; echo -n .
+        [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:$PORT/health" 2>/dev/null)" = 200 ] && break
+      done; echo
+      curl -sf --max-time 3 "http://127.0.0.1:$PORT/health" >/dev/null || die "server on 127.0.0.1:$PORT never became healthy"
+    else
+      "$SERVE" start
+    fi
+  fi
+}
+
+# `muse reflect`: between sessions, Muse reviews its recent sessions and saves what recurs (procedures, mistakes,
+# your corrections) as skills and memory, then reports what changed. The in-sandbox part is harness/reflect.py.
+reflect_usage() {
+  cat <<'EOF'
+usage: muse reflect [--stage] [--since T] [--list] [--max-sessions N] [--max-skills N] [--max-memory N]
+                    [--max-turns N] [--budget SECONDS] [--reasoning LEVEL]
+Muse reads a digest of its recent sessions (since the last reflect; first time: 7 days) and saves recurring
+procedures, mistakes and your corrections as skills and memory in the Hermes home (never in a project).
+Refuses while a muse session or eval runs. Report: state/hermes/reflect/<time>/report.md (also printed).
+  --stage          don't apply: stage every write for approval (/skills pending, /memory pending in a session)
+  --since T        last (default) | 3d | 12h | 2w | 2026-10-01 | all
+  --list           only show which sessions would be reviewed (no model call)
+  --max-sessions   newest N sessions in the window (12)    --max-turns   agent turns (40)
+  --max-skills     distinct skills created or changed (3)  --budget      wall-clock seconds (1800)
+  --max-memory     memory writes (5)                       --reasoning   low|medium|high|xhigh (config: high)
+Skill deletes are refused; memory replace/remove are staged. Each skill write is in Hermes's ledger:
+muse shell hermes curator ledger, and muse shell hermes curator rollback <id> undoes one.
+EOF
+}
+reflect() {
+  local since="" stage="" list="" nsess=12 nskills=3 nmem=5 turns=40 budget=1800 reasoning=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --stage) stage=--stage; shift ;;
+      --list) list=1; shift ;;
+      --since|--max-sessions|--max-skills|--max-memory|--max-turns|--budget|--reasoning)
+        [ $# -ge 2 ] || die "reflect: $1 needs a value"
+        case "$1" in
+          --since) since="$2" ;; --max-sessions) nsess="$2" ;; --max-skills) nskills="$2" ;;
+          --max-memory) nmem="$2" ;; --max-turns) turns="$2" ;; --budget) budget="$2" ;; --reasoning) reasoning="$2" ;;
+        esac; shift 2 ;;
+      -h|--help) reflect_usage; return 0 ;;
+      *) reflect_usage >&2; die "reflect: unknown option '$1'" ;;
+    esac
+  done
+  for n in "$nsess" "$nskills" "$nmem" "$turns" "$budget"; do [[ "$n" =~ ^[0-9]+$ ]] || die "reflect: '$n' is not a number"; done
+  case "$reasoning" in ""|low|medium|high|xhigh) ;; *) die "reflect: unknown reasoning level '$reasoning'" ;; esac
+  [ -f "$STATE/config.yaml" ] && [ -f "$STATE/state.db" ] || die "no sessions to reflect on yet ($STATE); use muse first"
+  [ -f "$REPO/harness/reflect.py" ] || die "missing $REPO/harness/reflect.py"
+  podman image exists "$IMAGE" 2>/dev/null || die "image $IMAGE not found; build it with $REPO/container/build.sh"
+  # The model has one slot and the sessions share this Hermes home: reflect only while nothing else runs.
+  if [ -z "$list" ]; then
+    local busy; busy="$(sharing)"
+    [ -z "$busy" ] || die "reflect waits until no muse session or eval runs; running now:
+$busy"
+  fi
+  local ts; ts="$(date +%Y%m%d-%H%M%S)"
+  local d="/muse/hermes/reflect/$ts"
+  local prep=(prepare "$d" --max-sessions "$nsess" --max-skills "$nskills" --max-memory "$nmem" ${stage:+"$stage"})
+  [ -n "$since" ] && prep+=(--since "$since")
+  [ -n "$list" ] && prep+=(--list)
+  local rc=0 hargs=(chat --query-file "$d/prompt.txt" --oneshot --yolo --format stream-json --source tool
+               -t "skills,memory,session_search" --max-turns "$turns" --run-budget "$budget")
+  [ -n "$reasoning" ] && hargs+=(--reasoning "$reasoning")
+  if [ -z "$list" ]; then
+    # MUSE_PORT pointing elsewhere (a mock or another server) is used as is; serve.sh only manages the default port.
+    if [ "$PORT" = 8080 ]; then ensure_server
+    else curl -sf --max-time 3 "http://127.0.0.1:$PORT/health" >/dev/null || die "nothing healthy on 127.0.0.1:$PORT"; fi
+  fi
+  mkdir -p "$STATE/reflect" "$STATE/cache/scratch"
+  local tz=(); [ -e /etc/localtime ] && tz+=(-v /etc/localtime:/etc/localtime:ro)
+  [ -f /etc/timezone ] && tz+=(-v /etc/timezone:/etc/timezone:ro)
+  local skills=(); [ -d "$REPO/harness/skills" ] && skills=(-v "$REPO/harness/skills:/muse/skills:ro")
+  [ -d "$REPO/harness/hooks" ] && skills+=(-v "$REPO/harness/hooks:/muse/hooks:ro")
+  # Only the Hermes home is writable; no project, no persistent home, no GPU. The fixed name keeps it to one run.
+  # The tools are skills, memory and session_search only (no terminal or file writes).
+  # shellcheck disable=SC2016
+  # --list makes no model call, so it may run beside a session (under another name).
+  local cname=muse-reflect; [ -n "$list" ] && cname="muse-reflect-list-$$"
+  podman run --rm --init --name "$cname" --label muse.session=1 --label muse.cwd="(muse reflect)" \
+    --label "muse.home=$STATE" --label "muse.port=$PORT" \
+    --network=host --userns=keep-id "${tz[@]}" \
+    -v "$STATE:/muse/hermes" -e HERMES_HOME=/muse/hermes "${skills[@]}" -e MUSE_SKILL_ROUTER=off \
+    -v "$REPO/harness/reflect.py:/muse/reflect.py:ro" \
+    --mount type=volume,destination=/muse/hermes/cache/scratch,U=true \
+    -w /muse/hermes/reflect "$IMAGE" bash -c '
+      py=/opt/hermes/venv/bin/python; d=$1; n=$2; shift 2
+      prep=("${@:1:n}"); shift "$n"
+      rc=0; $py /muse/reflect.py "${prep[@]}" || rc=$?
+      [ "$rc" = 3 ] && { echo "nothing to review"; exit 0; }
+      [ "$rc" = 0 ] || exit "$rc"
+      [ -f "$d/prompt.txt" ] || exit 0      # --list
+      echo "reflecting (tool calls below; the report follows)..."
+      set -o pipefail
+      $py /muse/reflect.py run "$d" "$@" 2> "$d/stderr.log" | tee "$d/events.jsonl" |
+        jq -r --unbuffered '\''select(.type=="tool_use") | "  \(.name) " + (if (.input.operations | type) == "array"
+          then ([.input.operations[] | "\(.action // "") \(.name // .target // "")"] | join(", "))
+          else "\(.input.action // "") \(.input.name // .input.target // .input.query // .input.session_id // "")" end)'\'' || rc=$?
+      echo
+      $py /muse/reflect.py report "$d" "$rc"
+      exit "$rc"' reflect "$d" "${#prep[@]}" "${prep[@]}" "${hargs[@]}" || rc=$?
+  [ -z "$list" ] && [ -f "$STATE/reflect/$ts/report.md" ] && echo "muse: report saved as $STATE/reflect/$ts/report.md"
+  return "$rc"
+}
+
+case "${1:-}" in
+  reflect)
+    shift; rc=0; reflect "$@" || rc=$?; exit "$rc" ;;
+  stop)
+    s="$(sessions)"; [ -n "$s" ] && echo "muse: warning, sessions still running (they will lose the model):" && echo "$s"
+    exec "$SERVE" stop ;;
+  status)
+    rc=0; "$SERVE" status || rc=$?
+    s="$(sessions)"; if [ -n "$s" ]; then echo "sessions:"; echo "$s" | sed 's/^/  /'; else echo "sessions: none"; fi
+    podman image exists "$IMAGE" 2>/dev/null && echo "image: $IMAGE" || echo "image: $IMAGE missing (run container/build.sh)"
+    exit "$rc" ;;
+  -h|--help|help)
+    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+# `muse prompt`: built offline the way Hermes builds it, with SOUL.md, config and the project's context files.
+# MCP tools connect at session start, so they are not listed.
+PROMPT_PY='
+import json
+from hermes_cli.prompt_size import _build_inspection_agent
+from agent.system_prompt import build_system_prompt
+agent = _build_inspection_agent("cli")
+print(build_system_prompt(agent))
+tools = getattr(agent, "tools", None) or []
+print("\n===== %d tool schemas, sent beside the system prompt (MCP tools not listed) =====" % len(tools))
+for t in tools:
+    f = t.get("function", t)
+    print("- %s (%d B): %s" % (f["name"], len(json.dumps(t)), ((f.get("description") or "").splitlines() or [""])[0][:150]))
+'
+CMD=(hermes)
+if [ "${1:-}" = shell ]; then shift; CMD=(bash); [ $# -gt 0 ] && CMD=(bash -lc "$*") && set --; fi
+if [ "${1:-}" = prompt ]; then shift; CMD=(/opt/hermes/venv/bin/python -c "$PROMPT_PY"); fi
+
+REASONING=""; HARGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --reasoning) [ $# -ge 2 ] || die "--reasoning needs a level (low|medium|high|xhigh)"; REASONING="$2"; shift 2 ;;
+    --reasoning=*) REASONING="${1#*=}"; shift ;;
+    --vision) shift ;;   # vision is always on now (serve.sh default)
+    *) HARGS+=("$1"); shift ;;
+  esac
+done
+case "$REASONING" in ""|low|medium|high|xhigh) ;; *) die "unknown reasoning level '$REASONING' (low|medium|high|xhigh)";; esac
+
+# --- launch scope: never the home dir, /, /mnt or a drive root
+P="$(pwd -P)"
+H="$(cd "$HOME" && pwd -P)"
+if [ "$P" = "/" ] || [ "$P" = "$H" ] || [ "$P" = "/mnt" ] || [[ "$P" =~ ^/mnt/[^/]+$ ]]; then
+  die "refusing to start in $P (it would expose too much); cd into a project directory"
+fi
+# The agent runs as you, so it can only save where you can write; otherwise its files land in the
+# container's home and vanish with the session.
+if [ ! -w "$P" ]; then
+  die "refusing to start in $P: you can't write there (owner $(stat -c %U "$P")), so the agent couldn't save files. Fix: sudo chown -R $(id -un): $P"
+fi
+
+podman image exists "$IMAGE" 2>/dev/null || die "image $IMAGE not found; build it with $REPO/container/build.sh"
+
+# --- server (not needed for `muse shell`)
+if [ "${CMD[0]}" = hermes ]; then ensure_server; fi
+
+# --- Hermes home: seeded once from the template, persistent afterwards
+if [ ! -f "$STATE/config.yaml" ]; then
+  mkdir -p "$STATE"; cp -a "$TEMPLATE/." "$STATE/"
+  echo "muse: seeded Hermes home $STATE from harness/hermes"
+fi
+# Create the scratch mount point as you: otherwise podman creates cache/ as container root and Hermes can't
+# write its caches there (vision_analyze fails with "Permission denied: .../cache/vision").
+mkdir -p "$STATE/cache/scratch"
+
+# --- persistent home (/home/muse), shared by every session and project: a global venv (~/venv, first on PATH,
+# also seeing the image's packages) and ~/.local for npm -g, pipx/uv tools and downloaded binaries. apt packages
+# can't persist (no root): they go in container/Containerfile. Created once; delete the directory to reset it.
+if [ ! -f "$HOMEDIR/venv/pyvenv.cfg" ]; then
+  mkdir -p "$HOMEDIR"
+  echo "muse: creating the persistent home $HOMEDIR (global venv)"
+  podman run --rm --userns=keep-id -v "$HOMEDIR:/home/muse" "$IMAGE" bash -c '
+    for f in /etc/skel/.[!.]*; do [ -e ~/"${f##*/}" ] || cp "$f" ~/; done
+    python3 -m venv --system-site-packages ~/venv' || die "could not create the venv in $HOMEDIR"
+fi
+# Hermes snapshots its terminal env with a login shell, where Debian's /etc/profile resets PATH, and it strips
+# VIRTUAL_ENV from the shell: ~/.profile restores both, so pip, uv and pyright all use the global venv.
+# shellcheck disable=SC2016
+grep -q '^export VIRTUAL_ENV=' "$HOMEDIR/.profile" 2>/dev/null ||
+  printf '\n# muse: the global venv is active and ~/.local/bin comes first\nexport VIRTUAL_ENV="$HOME/venv"\nPATH="$HOME/venv/bin:$HOME/.local/bin:$PATH"\n' >> "$HOMEDIR/.profile"
+# Muse's skills (read-only); skills it writes itself go to the Hermes home.
+SKILLS=(); [ -d "$REPO/harness/skills" ] && SKILLS=(-v "$REPO/harness/skills:/muse/skills:ro")
+# The skill router (a Hermes pre_llm_call hook) names matching skills next to each request.
+[ -d "$REPO/harness/hooks" ] && SKILLS+=(-v "$REPO/harness/hooks:/muse/hooks:ro")
+UH=/home/muse
+HOMEENV=(-v "$HOMEDIR:$UH" -e "PATH=$UH/venv/bin:$UH/.local/bin:/usr/local/bin:/usr/bin:/bin"
+         -e "VIRTUAL_ENV=$UH/venv" -e "NPM_CONFIG_PREFIX=$UH/.local")   # VIRTUAL_ENV: Hermes's execute_code runs this python
+
+# --- mask existing top-level .env* (files read as empty, dirs as empty tmpfs); never create one
+MASKS=()
+shopt -s nullglob dotglob
+for f in "$P"/.env*; do
+  if [ -d "$f" ] && [ ! -L "$f" ]; then MASKS+=(--mount "type=tmpfs,destination=$f,tmpfs-size=1m,notmpcopyup")
+  elif [ -e "$f" ] || [ -L "$f" ]; then MASKS+=(--mount "type=bind,source=/dev/null,destination=$f,readonly")
+  fi
+done
+shopt -u nullglob dotglob
+
+TTY=(-i); [ -t 0 ] && [ -t 1 ] && TTY=(-it)
+RARGS=(); [ -n "$REASONING" ] && RARGS=(--reasoning "$REASONING")
+[ "${CMD[0]}" = hermes ] || { RARGS=(); HARGS=(); }
+
+# GPU for small experiments: WSL exposes it as /dev/dxg plus the driver libs in /usr/lib/wsl (no toolkit
+# needed). It is shared with the model server, which holds most of its memory.
+GPU=(); [ -e /dev/dxg ] && GPU=(--device /dev/dxg -v /usr/lib/wsl:/usr/lib/wsl:ro -e LD_LIBRARY_PATH=/usr/lib/wsl/lib)
+# Same time zone as the host (the image defaults to UTC).
+TZM=(); [ -e /etc/localtime ] && TZM+=(-v /etc/localtime:/etc/localtime:ro)
+[ -f /etc/timezone ] && TZM+=(-v /etc/timezone:/etc/timezone:ro)
+if [ "${CMD[0]}" = hermes ] && podman container exists muse-reflect 2>/dev/null; then
+  echo "muse: warning, muse reflect is using the model, so replies wait for it (stop it: podman stop muse-reflect)"
+fi
+
+exec podman run --rm "${TTY[@]}" \
+  --name "muse-$$" --label muse.session=1 --label "muse.cwd=$P" --label "muse.home=$STATE" --label "muse.port=$PORT" \
+  --init --network=host --userns=keep-id "${GPU[@]}" "${TZM[@]}" \
+  -v "$P:$P" -w "$P" "${MASKS[@]}" \
+  -v "$STATE:/muse/hermes" -e HERMES_HOME=/muse/hermes "${HOMEENV[@]}" "${SKILLS[@]}" \
+  --mount type=volume,destination=/muse/hermes/cache/scratch,U=true \
+  -e TERM="${TERM:-xterm-256color}" -e COLORTERM="${COLORTERM:-}" \
+  "$IMAGE" "${CMD[@]}" "${RARGS[@]}" "${HARGS[@]}"

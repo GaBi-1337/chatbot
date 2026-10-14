@@ -1,0 +1,7 @@
+[
+  {"items": [{"sku": "A100", "qty": 3}, {"sku": "B200", "qty": 12}], "region": "CA"},
+  {"items": [{"sku": "C300", "qty": 2}, {"sku": "F600", "qty": 8}], "region": "NY", "coupon": "SAVE10"},
+  {"items": [{"sku": "E500", "qty": 4}, {"sku": "D400", "qty": 25}], "region": "TX", "coupon": "FIVEOFF", "credit": "2.50"},
+  {"items": [{"sku": "B200", "qty": 1}], "region": "OR"},
+  {"items": [{"sku": "F600", "qty": 40}, {"sku": "A100", "qty": 11}], "region": "CA", "credit": "$1,000"}
+]

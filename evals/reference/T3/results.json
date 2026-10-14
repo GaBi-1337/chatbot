@@ -1,0 +1,21 @@
+{
+ "total_errors": 521,
+ "top_error_service": "auth",
+ "release_todo_files": [
+  "data/app/alpha/f017.log",
+  "data/app/delta/f171.log",
+  "data/home/beta/f083.log.bak",
+  "data/home/delta/f348.log",
+  "data/home/delta/f401.csv",
+  "data/home/gamma/f412.md",
+  "data/home/gamma/f416.log",
+  "data/opt/beta/f160.csv",
+  "data/opt/beta/f381.log",
+  "data/opt/gamma/f287.csv",
+  "data/srv/delta/f214.md",
+  "data/var/alpha/f310.csv",
+  "data/var/beta/f199.json",
+  "data/var/gamma/f212.log"
+ ],
+ "empty_file_count": 9
+}

@@ -1,0 +1,5 @@
+2024-06-07T05:00:00 scheduler INFO cache commit session request
+2024-06-08T13:00:00 scheduler WARN timeout beta user retry token cache
+2024-06-01T01:00:00 billing ERROR cache gamma
+
+TODO(later): tidy up

@@ -1,3 +1,10 @@
 .env
 Models/
+run/
+evals/results/
+.claude/boards/
 __pycache__/
+*.pyc
+.venv/
+state/
+tools/llama.cpp/

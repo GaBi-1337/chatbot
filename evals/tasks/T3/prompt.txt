@@ -1,0 +1,10 @@
+The directory `data/` here holds a few hundred files from several servers. Investigate it and write `results.json` in the current directory with exactly these keys:
+
+{
+  "total_errors": <integer: number of log lines whose level is ERROR, counted over files whose name ends in ".log" only (not ".log.bak" or other types)>,
+  "top_error_service": <string: the service with the most ERROR lines in those same files>,
+  "release_todo_files": <sorted list of paths, relative to the current directory (e.g. "data/app/alpha/f001.log"), of every file of any type that contains the text "TODO(release)">,
+  "empty_file_count": <integer: number of zero-byte files under data/>
+}
+
+Log lines have the form `<timestamp> <service> <LEVEL> <message>`. Do not modify anything under `data/`.

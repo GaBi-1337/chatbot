@@ -1,0 +1,7 @@
+We are choosing the Python version for a small data-processing service that depends on numpy, scipy and pandas. We want the oldest CPython 3.x minor version that is still inside its upstream support window today, meaning its end-of-life date as published by endoflife.date has not passed yet. For that Python version, find the newest final release (no pre-releases, dev or post releases, nothing yanked) of each of numpy, scipy and pandas on PyPI whose `requires_python` metadata allows it.
+
+Write `answer.json` in the current directory with exactly these keys:
+
+{"python": "3.x", "eol": "YYYY-MM-DD", "numpy": "x.y.z", "scipy": "x.y.z", "pandas": "x.y.z"}
+
+where "eol" is that Python version's end-of-life date.

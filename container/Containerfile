@@ -1,0 +1,87 @@
+# muse-agent: Hermes Agent (pinned GitHub tag, sha256-verified) + mcp/web + the tools an agent needs.
+# Built by container/build.sh from a staged context (never the repo root: Models/ is ~20 GB).
+# Run rootless:  podman run --network=host --userns=keep-id -v "$PWD:$PWD" -w "$PWD" -v <state/hermes>:/muse/hermes ...
+# No credentials in the image.
+#
+# Why not install.sh / PyPI: PyPI stops at 0.19.0 (July; no --reasoning, no --format stream-json), and wheel/sdist
+# builds of newer tags are blocked by setup.py. install.sh clones git main and stages uv/python/node via its own
+# package manager. An editable install of the pinned tag (the route setup.py itself points developers to) gives
+# the same code with a plain venv.
+
+ARG PYIMG=docker.io/library/python:3.14-slim-trixie
+
+FROM ${PYIMG} AS base
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ripgrep curl ca-certificates libatomic1 \
+        procps less jq file openssh-client patch xz-utils \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/* /usr/share/info/*
+
+FROM base AS build
+ARG HERMES_REF=v0.21.7
+ARG HERMES_SHA256=fcf5fc29d3088764a5a293910f75f43dc736b5655ed410d7339cf94cc1462459
+ARG HERMES_COMMIT=71d34bad1045610252eda02ee79549436896e784
+RUN curl -fsSL -o /tmp/hermes.tgz "https://github.com/NousResearch/hermes-agent/archive/refs/tags/${HERMES_REF}.tar.gz" \
+    && echo "${HERMES_SHA256}  /tmp/hermes.tgz" | sha256sum -c - \
+    && mkdir -p /opt/hermes/src && tar xzf /tmp/hermes.tgz -C /opt/hermes/src --strip-components=1 && rm /tmp/hermes.tgz \
+    && cd /opt/hermes/src && rm -rf tests website apps docker evals ui-tui assets contributors \
+    && python -m venv /opt/hermes/venv \
+    && /opt/hermes/venv/bin/pip install --no-cache-dir -e "/opt/hermes/src[pty,mcp]" \
+    && cd /opt/hermes/src && /opt/hermes/venv/bin/python scripts/write_install_stamp.py --output install-stamp.json \
+         --commit "${HERMES_COMMIT}" --base-version "${HERMES_REF#v}" --distance 0 \
+         --source ci --distribution docker --update-mechanism external \
+    && /opt/hermes/venv/bin/python -m compileall -q -j0 /opt/hermes/src >/dev/null; true
+# Patch: Hermes tells the model "/mnt/c holds the user's Windows files" whenever the kernel is WSL, also inside
+# this container, where /mnt isn't mounted. Skip that hint in containers. The grep fails the build if the line moved.
+RUN f=/opt/hermes/src/agent/prompt_builder.py \
+    && grep -qx '    hints += \[WSL_ENVIRONMENT_HINT\] if is_wsl() else \[\]' "$f" \
+    && sed -i 's/^    hints += \[WSL_ENVIRONMENT_HINT\] if is_wsl() else \[\]$/    from hermes_platform.host.runtime import is_container  # muse patch\n    hints += [WSL_ENVIRONMENT_HINT] if is_wsl() and not is_container() else []/' "$f" \
+    && /opt/hermes/venv/bin/python -m compileall -q "$f"
+# mcp/web (task C): own venv, pinned requirements (mcp 1.x; Hermes's client uses mcp 2.x)
+COPY mcp-web/ /opt/mcp-web/
+RUN python -m venv /opt/mcp-web/.venv \
+    && /opt/mcp-web/.venv/bin/pip install --no-cache-dir -r /opt/mcp-web/requirements.txt \
+    && /opt/mcp-web/.venv/bin/pip uninstall -y pip
+
+FROM base
+# The agent's own toolchain. Build tools for C extensions and native addons; archive, sqlite, PDF (pdftotext,
+# pdftoppm), diagram (dot) and shell-lint CLIs; chromium-headless-shell, which the web tools use to render
+# JavaScript pages and take screenshots; headless LibreOffice (soffice) to convert and render Office files.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential pkg-config wget unzip zip bzip2 tree sqlite3 fd-find shellcheck \
+        poppler-utils graphviz chromium-headless-shell fonts-liberation fonts-dejavu-core \
+        libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui \
+    && ln -s /usr/bin/fdfind /usr/local/bin/fd \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/* /usr/share/info/*
+# Node 24 LTS from nodejs.org (Debian's Node 20 is past end of life, and typescript-language-server needs 22+),
+# plus the language servers Hermes runs after each edit to report new errors (lsp.install_strategy: manual).
+ARG NODE_VERSION=24.21.0
+ARG NODE_SHA256=fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
+RUN curl -fsSL -o /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+    && echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum -c - \
+    && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner \
+         --exclude='*/CHANGELOG.md' --exclude='*/README.md' --exclude='*/share/doc' --exclude='*/share/man' \
+    && rm /tmp/node.tar.xz \
+    && npm install -g --no-fund --no-audit --no-update-notifier \
+         pyright@1.1.414 typescript@5.9.3 typescript-language-server@6.0.2 bash-language-server@5.8.1 \
+    && npm cache clean --force && rm -rf /root/.npm
+# Python for the agent's own work: test and lint tools, uv, a data/document stack, and video download, frames
+# (imageio-ffmpeg's static ffmpeg) and YouTube captions for the watch-video skill. Imports are fast from the image;
+# the agent's persistent venv (~/venv, --system-site-packages) sees these and holds anything else it installs.
+RUN pip install --no-cache-dir --root-user-action=ignore \
+        pytest==8.4.2 uv==0.13.0 ruff==0.17.0 \
+        numpy==2.5.4 pandas==3.0.6 matplotlib==3.11.2 pillow==12.3.0 \
+        requests==2.34.2 httpx==0.28.1 beautifulsoup4==4.15.0 lxml==6.1.3 PyYAML==6.0.3 \
+        pypdf==6.20.1 pdfplumber==0.11.10 reportlab==5.0.1 openpyxl==3.1.5 python-docx==1.2.0 python-pptx==1.0.2 \
+        yt-dlp==2026.8.19 imageio-ffmpeg==0.6.0 youtube-transcript-api==1.2.4
+COPY --from=build /opt /opt
+RUN ln -s /opt/hermes/venv/bin/hermes /usr/local/bin/hermes \
+    && useradd -m -u 1000 -s /bin/bash muse \
+    && mkdir -p /muse/hermes && chown 1000:1000 /muse/hermes
+ENV HERMES_HOME=/muse/hermes \
+    LANG=C.UTF-8 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    UV_LINK_MODE=copy
+USER muse
+WORKDIR /home/muse
+CMD ["hermes"]

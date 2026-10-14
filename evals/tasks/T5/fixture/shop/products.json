@@ -1,0 +1,8 @@
+{
+  "A100": {"name": "Widget", "price": 19.99, "heavy": false},
+  "B200": {"name": "Gadget", "price": 4.35, "heavy": false},
+  "C300": {"name": "Anvil", "price": 45.10, "heavy": true},
+  "D400": {"name": "Sprocket", "price": 0.29, "heavy": false},
+  "E500": {"name": "Gizmo", "price": 12.5, "heavy": false},
+  "F600": {"name": "Flux Capacitor", "price": 1.15, "heavy": false}
+}

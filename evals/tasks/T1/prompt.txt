@@ -1,0 +1,1 @@
+This directory contains a small Python package `schedule` with a pytest suite in `tests/`. Some tests currently fail. Find the cause in the package code and fix it so that the whole suite passes. Do not modify anything under `tests/`. Run the tests with `python3 -m pytest` (install pytest with pip if it is missing).
