@@ -81,6 +81,7 @@ file_read_max_chars: 50000
 # bundled ones that work in the sandbox, and any Muse writes itself (they go to this Hermes home).
 skills:
   external_dirs: [/muse/skills]
+  write_approval: true
   # Bundled skills hidden from Muse: macOS-only, need tools or credentials it lacks, for developing Hermes
   # itself, covered by its instructions, low value, or replaced by a muse skill (which must have another name).
   # Kept: pdf, docx, xlsx, powerpoint, architecture-diagram, claude-design; hermes-agent can't be hidden.
@@ -125,10 +126,12 @@ display:
 approvals:
   mode: "off"                             # sandboxed in a container; equivalent to --yolo
 
-# Single llama-server slot: no background side requests (they would compete with the session for it).
+# Single llama-server slot: no background side requests that compete with the session for it, except the
+# background review: every ~10 turns it re-runs the conversation on the same model (reusing the cached prefix)
+# and proposes memory and skill saves. A message typed while it runs waits for it.
 auxiliary:
   title_generation: {enabled: false}
-  background_review: {enabled: false}
+  background_review: {enabled: true}
 curator: {enabled: false}
 
 # Subagents (delegate_task) take turns on the one model slot: llama-server's RAM prompt cache restores the
@@ -136,9 +139,12 @@ curator: {enabled: false}
 # exploration never enters the parent's context. One child at a time; a one-shot run may spawn two.
 delegation: {max_concurrent_children: 1, max_iterations: 60, oneshot_max_children: 2}
 
+# Approval gates (Hermes has no background-only switch): background-review writes and Muse's own skill writes
+# are staged for /memory pending and /skills pending; its in-session memory saves ask inline.
 memory:
   memory_enabled: true
   user_profile_enabled: true
+  write_approval: true
 
 # After an edit in a git repo, new errors from a language server show up in the tool result. The servers
 # (pyright, typescript-language-server, bash-language-server) are in the image; manual = never npm-install

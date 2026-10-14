@@ -236,6 +236,7 @@ def cmd_run(a):
         init(self, *args, **kw)
         self._memory_write_origin = self._memory_write_context = "background_review"
         self._review_attended = False                     # unattended: memory replace/remove get staged
+        self.skip_background_review = True                # reflect is itself the review
     run_agent.AIAgent.__init__ = patched_init
 
     if lim.get("stage"):
