@@ -132,7 +132,10 @@ approvals:
 auxiliary:
   title_generation: {enabled: false}
   background_review: {enabled: true}
-curator: {enabled: false}
+# Curator: once a week, after 2 idle hours, it marks skills Muse wrote but hasn't used for 14 days as stale and
+# archives them after 30 (recoverable). It leaves harness/skills, bundled and hand-added skills alone, and runs no
+# model: its consolidation pass would fork a model run on the single slot, so that stays off.
+curator: {enabled: true, consolidate: false}
 
 # Subagents (delegate_task) take turns on the one model slot: llama-server's RAM prompt cache restores the
 # parent's context when a child returns (16K-token parent: 1.7K new tokens to process, not 16K), and the child's
