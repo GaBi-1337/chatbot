@@ -5,6 +5,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 CTX="$REPO/run/image-ctx"
 rm -rf "$CTX"; mkdir -p "$CTX/mcp-web"
 cp "$REPO/container/Containerfile" "$CTX/"
+cp -r "$REPO/container/patches" "$CTX/"   # Hermes patches, applied and checked in the build stage
 # mcp/web code + requirements (no venvs, caches or tests data)
 if [ -d "$REPO/mcp/web" ]; then
   (cd "$REPO/mcp/web" && find . -maxdepth 1 -type f \( -name "server.py" -o -name "requirements.txt" \) -exec cp {} "$CTX/mcp-web/" \;)

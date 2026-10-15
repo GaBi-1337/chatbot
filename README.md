@@ -63,7 +63,7 @@ muse stop                  # stop the server and free the VRAM
   - Hermes's curator archives the skills Muse wrote that go unused for 30 days (recoverably, no model run); `muse shell hermes curator status` shows what it did.
   - **Skill router:** Muse rarely loads a skill from the skills list on its own, but follows a hint next to the request. `harness/hooks/skill_router.py`, a Hermes `pre_llm_call` hook, scores the enabled skills against each message and names at most two. With it, an arXiv question took 7 tool calls instead of 36 and found the newest papers.
 - **Subagents:** Muse can hand a side task that would flood its context, like searching a large codebase or reading many pages, to a subagent with `delegate_task`. Subagents take turns on the one model slot. When a subagent returns, llama-server restores Muse's own context from its RAM prompt cache instead of recomputing it, so a subagent costs about its own prompt plus its work.
-- **Learning during sessions:** every ~10 turns, Hermes's background review re-runs the conversation on the same model (reusing its cache) and proposes memory and skill saves. Every save waits for your approval: `/memory pending` and `/skills pending` in a session list them, and Muse's own memory saves ask you inline. A message you send while a review runs waits for it.
+- **Learning during sessions:** every ~10 turns, Hermes's background review re-runs the conversation on the same model (reusing its cache) and proposes memory and skill saves. Every save waits for your approval: `/memory pending` and `/skills pending` in a session list them, and Muse's own memory saves ask you inline. The review can only use the skill and memory tools; the image patches Hermes so that limit also applies on the threads its tools run on (`container/patches/`). A message you send while a review runs waits for it.
 - **Learning between sessions:** `muse reflect` has Muse review the sessions since the last run and turn recurring procedures, mistakes and your corrections into skills and memory. It runs only when no session uses the model. Each run may change at most 3 distinct skills and write at most 5 memory entries and writes a report to `state/hermes/reflect/<time>/`. With `--stage`, nothing is applied: approve or reject each change in a session with `/skills pending` and `/memory pending`.
 - **Code checks:** after each edit in a git repo, language servers report the errors it introduced: pyright for Python, typescript-language-server, and bash-language-server with shellcheck.
 
@@ -100,7 +100,7 @@ host ── server/serve.sh ── llama-server (Muse Q4_K_M + DFlash2 drafter +
 |---|---|
 | `muse` | Launcher: sandbox, server start, Hermes home, persistent home, `.env` masking, `muse prompt` |
 | `server/serve.sh` | `start/stop/restart/status [--no-vision] [--no-draft]` for the tuned llama-server |
-| `container/` | `Containerfile` and `build.sh` for the `muse-agent` image |
+| `container/` | `Containerfile` and `build.sh` for the `muse-agent` image; `patches/` holds the Hermes fixes applied (and checked) at build |
 | `harness/hermes/config.yaml` | Hermes home template. It is copied to `state/hermes` on first launch and fresh for each eval run |
 | `harness/skills/` | Muse's own skills, mounted read-only at `/muse/skills` in sessions and eval runs |
 | `harness/hooks/` | The skill router hook, mounted read-only at `/muse/hooks` |

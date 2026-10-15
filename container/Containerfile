@@ -37,6 +37,13 @@ RUN f=/opt/hermes/src/agent/prompt_builder.py \
     && grep -qx '    hints += \[WSL_ENVIRONMENT_HINT\] if is_wsl() else \[\]' "$f" \
     && sed -i 's/^    hints += \[WSL_ENVIRONMENT_HINT\] if is_wsl() else \[\]$/    from hermes_platform.host.runtime import is_container  # muse patch\n    hints += [WSL_ENVIRONMENT_HINT] if is_wsl() and not is_container() else []/' "$f" \
     && /opt/hermes/venv/bin/python -m compileall -q "$f"
+# Patch: a background review or /btw fork is limited to a tool whitelist that Hermes keeps in a threading.local,
+# but tools run on worker threads, where it doesn't apply, so the fork could call any tool (write_file, terminal)
+# and bypass write approval. Keep it in a ContextVar, which the workers copy. The check fails the build if not.
+COPY patches/ /tmp/patches/
+RUN cd /opt/hermes/src && patch -p1 --forward --batch < /tmp/patches/hermes-tool-whitelist.patch \
+    && /opt/hermes/venv/bin/python -I /tmp/patches/check_tool_whitelist.py \
+    && /opt/hermes/venv/bin/python -m compileall -q hermes_cli/plugins.py && rm -rf /tmp/patches
 # mcp/web (task C): own venv, pinned requirements (mcp 1.x; Hermes's client uses mcp 2.x)
 COPY mcp-web/ /opt/mcp-web/
 RUN python -m venv /opt/mcp-web/.venv \
