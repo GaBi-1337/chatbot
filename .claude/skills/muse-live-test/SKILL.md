@@ -15,6 +15,8 @@ Offline tests and mocks prove wiring; only the real model shows what Muse *does*
 
 Copy `state/hermes/config.yaml` and `state/hermes/SOUL.md` (plus `state/hermes/skills/methods/` when the user's own skills matter) into `run/cap/home/`. Tests then never write the user's sessions, memory or approval queue. Apply the config change under test to this copy first.
 
+The agent's home folder is separate from the Hermes home: `muse` uses `state/home` unless `MUSE_HOME_DIR` is set. Both runners below default it to `run/cap/homedir`; when you call `muse` any other way, set `MUSE_HOME_DIR` yourself.
+
 ## 3. Run in the mode that matches the question
 
 - **Interactive** (what the user gets; Hermes's strong "load matching skills" prompt, `skill_manage` available):

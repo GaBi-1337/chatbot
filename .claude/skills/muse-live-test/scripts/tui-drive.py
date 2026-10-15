@@ -15,6 +15,7 @@ pid, fd = pty.fork()
 if pid == 0:
     os.chdir(work)
     env = dict(os.environ, MUSE_STATE=state, TERM="xterm-256color", COLUMNS="160", LINES="50")
+    env.setdefault("MUSE_HOME_DIR", str(Path(MUSE).parent / "run/cap/homedir"))  # never the user's state/home
     os.execvpe(MUSE, ["muse"], env)
 out = open(log, "wb")
 def drain():
