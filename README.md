@@ -48,12 +48,14 @@ muse --reasoning xhigh     # low | medium | high (default) | xhigh, for this ses
 muse shell [cmd]           # bash in the same sandbox, without Hermes
 muse prompt                # the system prompt and tools a new session in this directory gets
 muse reflect --stage       # review recent sessions and propose skills and memory (muse reflect -h)
+muse start                 # start only the model server, for other tools and directories (see below)
 muse status                # server state, VRAM, running sessions
 muse stop                  # stop the server and free the VRAM
 ```
 
 - The server stays up between sessions until `muse stop`.
-- **Instructions:** Muse's standing instructions are `state/hermes/SOUL.md`, Hermes's identity file at the top of every system prompt. Edit it to change how Muse works; new sessions pick it up. Each past session's exact system prompt is stored in `state/hermes/state.db` (table `sessions`, column `system_prompt`).
+- **Other clients:** after `muse start`, anything that speaks the OpenAI API can use the model from any directory: base URL `http://127.0.0.1:8080/v1`, model `muse-glimmer-30B`, any API key. The server has one slot, so requests from several clients (or a Muse session) take turns.
+- **Instructions:** Muse's standing instructions are `state/hermes/SOUL.md`, Hermes's identity file at the top of every system prompt. Edit it to change how Muse works; new sessions pick it up. Each past session's exact system prompt is stored in `state/hermes/state.db` (table `system_prompts`, joined on `sessions.system_prompt_hash`).
 - **Images:** Muse can see. The server loads the vision projector by default, and Hermes's `vision_analyze` tool hands an image file (a plot the agent made, a screenshot you saved in the project) straight to the model.
 - **Web:** the `internet` tools search the web (DuckDuckGo) and fetch pages as markdown. They also read PDFs page by page, save images for Muse to look at, render JavaScript sites in headless Chromium, and screenshot a page, a local web app or an HTML file.
 - **Skills:** procedures Muse loads when a task calls for them.

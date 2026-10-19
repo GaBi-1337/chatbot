@@ -2,6 +2,7 @@
 # muse - Hermes Agent on the local Muse Glimmer 30B, sandboxed in rootless Podman.
 #
 #   muse [--reasoning LEVEL] [hermes args...]              start the server if needed, open Hermes in $PWD
+#   muse start                                             start the server only (for any OpenAI-compatible client)
 #   muse status                                            server + running sessions
 #   muse stop                                              stop the server (frees VRAM)
 #   muse shell [cmd...]                                    bash (or cmd) in the same sandbox, without Hermes
@@ -169,6 +170,10 @@ $busy"
 case "${1:-}" in
   reflect)
     shift; rc=0; reflect "$@" || rc=$?; exit "$rc" ;;
+  start)
+    ensure_server
+    echo "muse: model muse-glimmer-30B at http://127.0.0.1:$PORT/v1 (OpenAI-compatible, no API key); muse stop frees the GPU"
+    exit 0 ;;
   stop)
     s="$(sessions)"; [ -n "$s" ] && echo "muse: warning, sessions still running (they will lose the model):" && echo "$s"
     exec "$SERVE" stop ;;
@@ -183,7 +188,7 @@ case "${1:-}" in
     podman image exists "$IMAGE" 2>/dev/null && echo "image: $IMAGE" || echo "image: $IMAGE missing (run container/build.sh)"
     exit "$rc" ;;
   -h|--help|help)
-    sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
 # `muse prompt`: built offline the way Hermes builds it, with SOUL.md, config and the project's context files.
