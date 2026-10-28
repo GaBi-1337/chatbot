@@ -5,6 +5,7 @@
 #   muse start                                             start the server only (for any OpenAI-compatible client)
 #   muse status                                            server + running sessions
 #   muse stop                                              stop the server (frees VRAM)
+#   muse reset [-y]                                        forget all sessions, memory and the home folder; keep the setup
 #   muse shell [cmd...]                                    bash (or cmd) in the same sandbox, without Hermes
 #   muse prompt                                            the system prompt and tools a new session here gets
 #   muse reflect [--stage] [--since T] [--list] [...]      learn skills + memory from recent sessions (muse reflect -h)
@@ -91,6 +92,62 @@ Skill deletes are refused; memory replace/remove are staged. Each skill write is
 muse shell hermes curator ledger, and muse shell hermes curator rollback <id> undoes one.
 EOF
 }
+# `muse reset [-y]`: forget everything sessions recorded, keep the setup. Clears the persistent home, every chat
+# (state.db), logs, input history, memory, pending approvals, caches and reflect reports. In skills/: removes skills
+# sessions wrote (not bundled with Hermes, outside methods/) and restores edited bundled skills from the image.
+# Keeps config.yaml, SOUL.md, auth.json, methods/ and the cron jobs. Refuses while any container uses these folders.
+RESET_PY='
+import filecmp, os, shutil, sys
+from pathlib import Path
+apply, skills, bundled = sys.argv[1] == "apply", Path("/s"), Path("/opt/hermes/src/skills")
+names = {l.split(":")[0].strip() for l in (skills / ".bundled_manifest").read_text().splitlines() if l.strip()} \
+    if (skills / ".bundled_manifest").exists() else set()
+src = {p.parent.name: p.parent for p in bundled.rglob("SKILL.md")}
+def same(a, b):
+    c = filecmp.dircmp(a, b, ignore=["__pycache__"])
+    return not (c.left_only or c.right_only or c.diff_files or c.funny_files) and all(
+        same(a / d, b / d) for d in c.common_dirs)
+for md in sorted(skills.rglob("SKILL.md")):
+    d = md.parent; rel = d.relative_to(skills)
+    if rel.parts[0].startswith(".") or rel.parts[0] == "methods" or not d.exists():
+        continue
+    if d.name not in names:
+        print(f"  remove skill written by a session: {rel}")
+        if apply: shutil.rmtree(d)
+    elif d.name in src and not same(d, src[d.name]):
+        print(f"  restore edited bundled skill: {rel}")
+        if apply: shutil.rmtree(d); shutil.copytree(src[d.name], d, ignore=shutil.ignore_patterns("__pycache__"))
+'
+reset() {
+  local yes=""; [ "${1:-}" = -y ] && yes=1
+  [ -d "$STATE" ] || die "no Hermes home at $STATE"
+  local me home c using=""; me="$(readlink -f "$STATE")"; home="$(readlink -f "$HOMEDIR" 2>/dev/null || echo "$HOMEDIR")"
+  for c in $(podman ps -q 2>/dev/null); do
+    podman inspect -f '{{range .Mounts}}{{.Source}} {{end}}' "$c" 2>/dev/null | tr ' ' '\n' |
+      grep -qxF -e "$me" -e "$home" && using+="$(podman ps --filter "id=$c" --format '  {{.Names}}  {{.Status}}')"$'\n'
+  done
+  [ -z "$using" ] || { printf 'muse: these containers use the Hermes home or home folder; stop them first:\n%s' "$using" >&2; exit 1; }
+  local n=0
+  [ -f "$STATE/state.db" ] && n="$(python3 -c 'import sqlite3,sys; print(sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True).execute("select count(*) from sessions").fetchone()[0])' "$STATE/state.db" 2>/dev/null || echo "?")"
+  echo "muse reset clears: $n session(s) in $STATE/state.db, logs, input history, memory, $(find "$STATE/pending" -name '*.json' 2>/dev/null | wc -l) pending approval(s), caches, reflect reports and $HOMEDIR"
+  podman run --rm --userns=keep-id --network=none -v "$STATE/skills:/s:ro" --entrypoint python3 "$IMAGE" -I -c "$RESET_PY" plan
+  echo "It keeps config.yaml, SOUL.md, auth.json, skills/methods/ and cron jobs."
+  if [ -z "$yes" ]; then
+    [ -t 0 ] || die "not a terminal: pass -y to reset without asking"
+    read -r -p "Reset? [y/N] " a; [[ "$a" =~ ^[yY] ]] || { echo "muse: nothing changed"; return 0; }
+  fi
+  podman run --rm --userns=keep-id --network=none -v "$STATE/skills:/s" --entrypoint python3 "$IMAGE" -I -c "$RESET_PY" apply >/dev/null
+  rm -rf "$HOMEDIR"
+  ( cd "$STATE"
+    rm -f state.db state.db-* state.db.*.lock .hermes_history interrupt_debug.log processes.json spawn-ledger.json \
+          .skills_prompt_snapshot.json skills/.usage.json skills/.usage.json.lock skills/.curator_state skills/.curator_ledger.jsonl
+    for d in logs pending reflect cache image_cache audio_cache sessions terminal-sessions sandboxes runtime backups cron/output; do
+      [ -d "$d" ] && find "$d" -mindepth 1 \( -type f -o -type l \) -delete
+    done
+    for f in memories/MEMORY.md memories/USER.md; do [ -f "$f" ] && : > "$f"; done )
+  echo "muse: reset done; the next muse session starts fresh"
+}
+
 reflect() {
   local since="" stage="" list="" nsess=12 nskills=3 nmem=5 turns=40 budget=1800 reasoning=""
   while [ $# -gt 0 ]; do
@@ -168,6 +225,8 @@ $busy"
 }
 
 case "${1:-}" in
+  reset)
+    shift; reset "$@"; exit 0 ;;
   reflect)
     shift; rc=0; reflect "$@" || rc=$?; exit "$rc" ;;
   start)
@@ -188,7 +247,7 @@ case "${1:-}" in
     podman image exists "$IMAGE" 2>/dev/null && echo "image: $IMAGE" || echo "image: $IMAGE missing (run container/build.sh)"
     exit "$rc" ;;
   -h|--help|help)
-    sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
 # `muse prompt`: built offline the way Hermes builds it, with SOUL.md, config and the project's context files.

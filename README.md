@@ -51,6 +51,7 @@ muse reflect --stage       # review recent sessions and propose skills and memor
 muse start                 # start only the model server, for other tools and directories (see below)
 muse status                # server state, VRAM, running sessions
 muse stop                  # stop the server and free the VRAM
+muse reset                 # forget every session, memory and the home folder; keep config, SOUL.md and skills
 ```
 
 - The server stays up between sessions until `muse stop`.
@@ -123,7 +124,7 @@ host ── server/serve.sh ── llama-server (Muse Q4_K_M + DFlash2 drafter +
   - `python` and `pip` there are a global venv (`~/venv`), which also sees the image's packages. It is active in the agent's shell, so `uv pip` installs there too.
   - `npm install -g`, pipx or uv tools and programs in `~/.local/bin` persist too. apt packages can't (the agent has no root), so add those to `container/Containerfile`.
   - Install something yourself with `muse shell pip install …`.
-  - **Reset**, with no session running (`muse status` lists them), from the repo: `rm -rf state/home/venv` drops only the Python packages; `rm -rf state/home` drops everything (packages, tools, dotfiles). The next `muse` or `muse shell` rebuilds what's missing.
+  - **Reset**, with no session running (`muse status` lists them), from the repo: `rm -rf state/home/venv` drops only the Python packages; `rm -rf state/home` drops everything (packages, tools, dotfiles). The next `muse` or `muse shell` rebuilds what's missing. To also forget every chat, memory, pending approval and skill a session wrote, use `muse reset` (it lists what it will clear and asks first; `-y` skips the question).
   - It sits with the repo, so on a slow mount (such as a Windows drive under WSL) Python starts slower, by seconds for `pip` and heavy imports. Set `MUSE_HOME_DIR` to move it.
 - **Secrets:** existing top-level `.env*` files are masked: they read as empty and are read-only. No new ones are created.
 - **Approvals:** the agent runs with auto-approve (`--yolo`) inside the sandbox.
